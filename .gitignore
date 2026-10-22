@@ -1,0 +1,29 @@
+# Local build and user data
+**/bin/
+**/obj/
+**/data/
+**/test-data/
+.vs/
+.idea/
+*.user
+*.suo
+*.dmp
+*.log
+*.aedat4
+*.backup-*
+.env
+.env.*
+!.env.example
+dist/
+native/packages/
+native/native-deps/
+native/native-build/
+native/runtime-source/
+native/processing-source/
+native/*.tar.gz
+native/*.partial
+__pycache__/
+*.pyc
+
+# Keep local UI captures out of public commits
+docs/images/configuration.png

@@ -1,0 +1,67 @@
+file_identifier "CFGA";
+
+namespace dv;
+
+enum ConfigAction : int8 {
+	CFG_ERROR          = 0,
+	NODE_EXISTS        = 1,
+	ATTR_EXISTS        = 2,
+	GET_CHILDREN       = 3,
+	GET_ATTRIBUTES     = 4,
+	GET_TYPE           = 5,
+	GET_RANGES         = 6,
+	GET_FLAGS          = 7,
+	GET_DESCRIPTION    = 8,
+	GET                = 9,
+	PUT                = 10,
+	ADD_MODULE         = 11,
+	REMOVE_MODULE      = 12,
+	ADD_PUSH_CLIENT    = 13,
+	REMOVE_PUSH_CLIENT = 14,
+	PUSH_MESSAGE_NODE  = 15,
+	PUSH_MESSAGE_ATTR  = 16,
+	DUMP_TREE          = 17,
+	DUMP_TREE_NODE     = 18,
+	DUMP_TREE_ATTR     = 19,
+	GET_CLIENT_ID      = 20
+}
+
+enum ConfigType : int8 {
+	UNKNOWN = -1,
+	BOOL    = 0,
+	INT     = 1,
+	LONG    = 2,
+	FLOAT   = 3,
+	DOUBLE  = 4,
+	STRING  = 5
+}
+
+enum ConfigNodeEvents : int8 {
+	NODE_ADDED   = 0,
+	NODE_REMOVED = 1
+}
+
+enum ConfigAttributeEvents : int8 {
+	ATTRIBUTE_ADDED           = 0,
+	ATTRIBUTE_MODIFIED        = 1,
+	ATTRIBUTE_REMOVED         = 2,
+	ATTRIBUTE_MODIFIED_CREATE = 3
+}
+
+table ConfigActionData {
+	action: ConfigAction = CFG_ERROR;
+	nodeEvents: ConfigNodeEvents; // Node related.
+	attrEvents: ConfigAttributeEvents; // Attribute related.
+	id: uint64;
+	node: string;
+	key: string;
+	type: ConfigType = UNKNOWN;
+	value: string;
+	// On attribute create() only.
+	ranges: string;
+	flags: int32;
+	description: string;
+}
+
+root_type ConfigActionData;
+

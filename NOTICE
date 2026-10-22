@@ -1,0 +1,21 @@
+DV Companion 0.2.1 — independent Windows companion for iniVation DV.
+Companion code, original icon artwork, and local modifications: Apache-2.0.
+
+Native modifications are based on iniVation dv-runtime 1.7.1 and dv-processing
+2.0.2, both distributed under Apache-2.0. Original upstream copyright and
+license notices remain in the downloaded source trees; copies of the top-level
+licenses are in native/licenses/. Source URLs and exact archive SHA256 values
+are recorded in native/source-archives.json. native/protocol.fbs follows the
+upstream runtime configuration protocol.
+
+Modified upstream files: runtime src/log.cpp, src/log_safety.hpp,
+src/devices_discovery.cpp, src/config_server/config_server_actions.cpp;
+processing include/dv-processing/io/camera/davis.hpp and usb_device.hpp.
+Changes include UTF-8 validation, logging recursion protection and lock ordering,
+device metadata refresh, missing-device messages and discovery/open serialization.
+See native/local-changes.patch and native/build_native.py for the changes.
+
+No original Java GUI, installed DV package, SDK DLL or third-party runtime binary
+is included. Native components link to the user's existing DV installation.
+Downloaded header/library packages retain their own licenses under
+native/native-deps/mingw64/share/licenses/. This is not an official iniVation release.

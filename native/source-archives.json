@@ -1,0 +1,12 @@
+[
+  {
+    "file": "runtime-1.7.1.tar.gz",
+    "url": "https://gitlab.com/api/v4/projects/8834320/repository/archive.tar.gz?sha=1.7.1",
+    "sha256": "d9810ea5be6cf204e04ccaad6c2fc0bb78a5ad91b07aa71ab4997cbd9685d315"
+  },
+  {
+    "file": "processing-2.0.2.tar.gz",
+    "url": "https://gitlab.com/api/v4/projects/28252866/repository/archive.tar.gz?sha=2.0.2",
+    "sha256": "0c10645d5db18a28895c81b4666f06f55bcdc9aa598a14bbaa8c46b35a6c7f99"
+  }
+]

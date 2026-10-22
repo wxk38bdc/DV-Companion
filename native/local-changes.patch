@@ -1,0 +1,418 @@
+--- a/runtime-source/src/log.cpp
++++ b/runtime-source/src/log.cpp
+@@ -1,4 +1,5 @@
+ #include "log.hpp"
++#include "log_safety.hpp"
+ 
+ #include "../include/dv-sdk/cross/portable_io.h"
+ #include "../include/dv-sdk/cross/portable_time.h"
+@@ -37,6 +38,7 @@
+ } logFile;
+ 
+ static dv::Cfg::Node logNode = nullptr;
++static std::atomic<int64_t> cachedLogLimit{20971520};
+ 
+ // thread variables
+ static thread_local const dv::LoggerInternal::LogBlock *loggerPtr = nullptr;
+@@ -120,7 +122,11 @@
+ 	}
+ }
+ 
+-static void writeMessage(const std::string &logString) {
++static void writeMessage(const std::string &rawString) {
++	dv_companion::LogGuard recursion;
++	if (!recursion) return;
++	const auto logString = dv_companion::safeUtf8(rawString);
++	{
+ 	// Lock to guarantee same order of messages for all outputs.
+ 	std::scoped_lock lock(logFile.mutex);
+ 
+@@ -133,7 +139,7 @@
+ 	if (logFile.stream.is_open()) {
+ 		logFile.stream << logString << std::endl;
+ 
+-		const auto maxSize    = logNode.getLong("limitLogSize");
++		const auto maxSize    = cachedLogLimit.load(std::memory_order_relaxed);
+ 		const auto actualSize = static_cast<std::streamoff>(logFile.stream.tellp());
+ 
+ 		if (maxSize < actualSize) {
+@@ -141,8 +147,9 @@
+ 		}
+ 	}
+ 
++	} // Release the file lock before configuration callbacks.
+ 	// Write to network.
+-	if (logNode) {
++	if (logNode && !dv_companion::inConfigError) {
+ 		logNode.updateReadOnly<dv::CfgType::STRING>("lastLogMessage", logString);
+ 	}
+ }
+@@ -194,6 +201,7 @@
+ 	logNode.create<dv::CfgType::LONG>(
+ 		"limitLogSize", defaultLogSize, {0, INT64_MAX}, dv::CfgFlags::NORMAL, "Maximum size for log file in bytes.");
+ 
++	cachedLogLimit.store(logNode.getLong("limitLogSize"), std::memory_order_relaxed);
+ 	// Try to open the specified file and error out if not possible.
+ 	{
+ 		std::unique_lock lock(logFile.mutex);
+@@ -261,6 +269,7 @@
+ }
+ 
+ static void logConfigLogger(const char *msg, bool fatal) {
++	dv_companion::ConfigErrorGuard configurationError;
+ 	dv::Log(dv::logLevel::ERROR, msg);
+ 
+ 	if (fatal) {
+@@ -272,6 +281,7 @@
+ 	const char *changeKey, enum dvConfigAttributeType changeType, union dvConfigAttributeValue changeValue) {
+ 	UNUSED_ARGUMENT(node);
+ 	UNUSED_ARGUMENT(userData);
++	if (event == DVCFG_ATTRIBUTE_MODIFIED && changeType == DVCFG_TYPE_LONG && std::string(changeKey) == "limitLogSize") { cachedLogLimit.store(changeValue.ilong, std::memory_order_relaxed); }
+ 
+ 	if (event == DVCFG_ATTRIBUTE_MODIFIED && changeType == DVCFG_TYPE_STRING && std::string(changeKey) == "logLevel") {
+ 		// Update the global log level asynchronously.
+--- a/runtime-source/src/devices_discovery.cpp
++++ b/runtime-source/src/devices_discovery.cpp
+@@ -65,7 +65,7 @@
+ 
+ 	// Update devices present in both. If information exists, it should
+ 	// be more up-to-date, so we can just copy it.
+-	for (const auto &devName : devicesToAdd) {
++	for (const auto &devName : devicesToUpdate) {
+ 		auto source      = newDevicesNode.getRelativeNode(devName + '/');
+ 		auto destination = devicesNode.getRelativeNode(devName + '/');
+ 
+--- a/runtime-source/src/config_server/config_server_actions.cpp
++++ b/runtime-source/src/config_server/config_server_actions.cpp
+@@ -1,4 +1,5 @@
+ #include "config_server_actions.h"
++#include "../log_safety.hpp"
+ 
+ #include "../../include/dv-sdk/cross/portable_io.h"
+ #include "../../include/dv-sdk/utils.h"
+@@ -83,6 +84,10 @@
+ 	}
+ 
+ 	std::string s(str->string_view());
++	if (dv_companion::safeUtf8(s) != s) {
++		sendError("Configuration strings must be valid UTF-8 without NUL bytes.", client, receivedID);
++		throw std::invalid_argument("Invalid UTF-8 configuration string.");
++	}
+ 
+ 	if (!allowEmptyString && s.empty()) {
+ 		sendError("String member empty.", client, receivedID);
+--- a/processing-source/include/dv-processing/io/camera/davis.hpp
++++ b/processing-source/include/dv-processing/io/camera/davis.hpp
+@@ -110,6 +110,12 @@
+ 		return filterCompatibleDevices(found, filterBySerialNumber);
+ 	}
+ 
++	[[nodiscard]] static auto findFirstAvailable(const std::string_view serial = {}) {
++		const auto found = findDevices(serial);
++		if (found.empty()) throw std::runtime_error("No available DAVIS camera matches serial: " + std::string(serial) + ". Check connection and other camera users.");
++		return found.front();
++	}
++
+ 	/**
+ 	 * Open the first DAVIS camera that can be found.
+ 	 * Throws if device cannot be opened.
+@@ -117,7 +123,7 @@
+ 	 * @param deviceLogLevel initial log-level
+ 	 */
+ 	explicit DAVIS(loggerCallbackType deviceLogger = {}, const LogLevel deviceLogLevel = LogLevel::LVL_WARNING) :
+-		DAVIS(findDevices().at(0), std::move(deviceLogger), deviceLogLevel) {
++		DAVIS(findFirstAvailable(), std::move(deviceLogger), deviceLogLevel) {
+ 	}
+ 
+ 	/**
+@@ -129,7 +135,7 @@
+ 	 */
+ 	explicit DAVIS(const std::string_view filterBySerialNumber, loggerCallbackType deviceLogger = {},
+ 		const LogLevel deviceLogLevel = LogLevel::LVL_WARNING) :
+-		DAVIS(findDevices(filterBySerialNumber).at(0), std::move(deviceLogger), deviceLogLevel) {
++		DAVIS(findFirstAvailable(filterBySerialNumber), std::move(deviceLogger), deviceLogLevel) {
+ 	}
+ 
+ 	/**
+@@ -1025,7 +1031,7 @@
+ 	/**
+ 	 * Get background activity noise filter time delta value.
+ 	 * If 0, filtering is disabled.
+-	 * @return time delta value in 250µs multiples
++	 * @return time delta value in 250碌s multiples
+ 	 */
+ 	[[nodiscard]] uint16_t getBackgroundActivityFilter() const {
+ 		if (!mInfo.dvsHasBackgroundActivityFilter) {
+@@ -1038,7 +1044,7 @@
+ 	/**
+ 	 * Set background activity noise filter time delta value.
+ 	 * If 0, filtering is disabled.
+-	 * @param timeIn250us time delta value in 250µs multiples
++	 * @param timeIn250us time delta value in 250碌s multiples
+ 	 */
+ 	void setBackgroundActivityFilter(const uint16_t timeIn250us) {
+ 		if (!mInfo.dvsHasBackgroundActivityFilter) {
+@@ -1066,7 +1072,7 @@
+ 	/**
+ 	 * Get refractory period filter time delta value.
+ 	 * If 0, filtering is disabled.
+-	 * @return time delta value in 250µs multiples
++	 * @return time delta value in 250碌s multiples
+ 	 */
+ 	[[nodiscard]] uint16_t getRefractoryPeriodFilter() const {
+ 		if (!mInfo.dvsHasBackgroundActivityFilter) {
+@@ -1079,7 +1085,7 @@
+ 	/**
+ 	 * Set refractory period filter time delta value.
+ 	 * If 0, filtering is disabled.
+-	 * @param timeIn250us time delta value in 250µs multiples
++	 * @param timeIn250us time delta value in 250碌s multiples
+ 	 */
+ 	void setRefractoryPeriodFilter(const uint16_t timeIn250us) {
+ 		if (!mInfo.dvsHasBackgroundActivityFilter) {
+@@ -1346,7 +1352,7 @@
+ 	[[nodiscard]] std::chrono::microseconds getExposureDuration() const {
+ 		std::scoped_lock lock{mConfigLock};
+ 
+-		// Times are in µs on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		const auto lengthInTicks = spiConfigReceive(MODULE_APS, APS_EXPOSURE);
+ 
+ 		return std::chrono::microseconds{std::llround(static_cast<float>(lengthInTicks) / mADCClockActual)};
+@@ -1375,7 +1381,7 @@
+ 			mAutoExposureLast = exposureDurationUs;
+ 		}
+ 
+-		// Times are in µs on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		auto lengthInTicks
+ 			= static_cast<uint32_t>(std::lround(static_cast<float>(exposureDurationUs.count()) * mADCClockActual));
+ 
+@@ -1389,7 +1395,7 @@
+ 	 * @return frame interval in microseconds.
+ 	 */
+ 	[[nodiscard]] std::chrono::microseconds getFrameInterval() const {
+-		// Times are in µs on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		const auto lengthInTicks = spiConfigReceive(MODULE_APS, APS_FRAME_INTERVAL);
+ 
+ 		return std::chrono::microseconds{std::llround(static_cast<float>(lengthInTicks) / mADCClockActual)};
+@@ -1405,7 +1411,7 @@
+ 				"The frame interval duration is invalid.", frameIntervalUs);
+ 		}
+ 
+-		// Times are in µs on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		auto lengthInTicks
+ 			= static_cast<uint32_t>(std::lround(static_cast<float>(frameIntervalUs.count()) * mADCClockActual));
+ 
+@@ -1716,7 +1722,7 @@
+ 
+ 		const auto intervalTimeUs = lowTimeUs + getGeneratorHighTimeInternal();
+ 
+-		// Times are in µs on host, but in cycles @ LOGIC_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ LOGIC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		auto intervalInTicks
+ 			= static_cast<uint32_t>(std::lround(static_cast<float>(intervalTimeUs.count()) * mLogicClockActual));
+ 
+@@ -1748,7 +1754,7 @@
+ 
+ 		std::scoped_lock lock{mConfigLock};
+ 
+-		// Times are in µs on host, but in cycles @ LOGIC_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ LOGIC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		auto lengthInTicks
+ 			= static_cast<uint32_t>(std::lround(static_cast<float>(highTimeUs.count()) * mLogicClockActual));
+ 
+@@ -2047,7 +2053,7 @@
+ 	 * @return timeout in microseconds.
+ 	 */
+ 	[[nodiscard]] std::chrono::microseconds getUSBEarlyPacketDelay() const {
+-		// Times are in µs on host, but in cycles @ USB_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ USB_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		const auto delayInTicks = spiConfigReceive(MODULE_USB, USB_EARLY_PACKET_DELAY);
+ 
+ 		return std::chrono::microseconds{std::llround(static_cast<float>(delayInTicks) / mUSBClockActual)};
+@@ -2055,7 +2061,7 @@
+ 
+ 	/**
+ 	 * Send data over USB early if this timeout is reached, instead of waiting on buffers being full.
+-	 * Timeout on device is in 125µs time-slices.
++	 * Timeout on device is in 125碌s time-slices.
+ 	 * @param earlyPacketDelayUs timeout in microseconds.
+ 	 */
+ 	void setUSBEarlyPacketDelay(const std::chrono::microseconds earlyPacketDelayUs) {
+@@ -2064,7 +2070,7 @@
+ 				"The USB Early Packet delay is invalid.", earlyPacketDelayUs);
+ 		}
+ 
+-		// Times are in µs on host, but in cycles @ USB_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ USB_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		auto delayInTicks
+ 			= static_cast<uint32_t>(std::lround(static_cast<float>(earlyPacketDelayUs.count()) * mUSBClockActual));
+ 
+@@ -2095,14 +2101,14 @@
+ 	}
+ 
+ 	[[nodiscard]] std::chrono::microseconds getGeneratorHighTimeInternal() const {
+-		// Times are in µs on host, but in cycles @ LOGIC_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ LOGIC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		const auto lengthInTicks = spiConfigReceive(MODULE_EXTERNAL_INPUT, EXTINPUT_GENERATE_PULSE_LENGTH);
+ 
+ 		return std::chrono::microseconds{std::llround(static_cast<float>(lengthInTicks) / mLogicClockActual)};
+ 	}
+ 
+ 	[[nodiscard]] std::chrono::microseconds getGeneratorLowTimeInternal() const {
+-		// Times are in µs on host, but in cycles @ LOGIC_CLOCK_FREQ on FPGA, so we adjust for that.
++		// Times are in 碌s on host, but in cycles @ LOGIC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 		const auto intervalInTicks = spiConfigReceive(MODULE_EXTERNAL_INPUT, EXTINPUT_GENERATE_PULSE_INTERVAL);
+ 
+ 		const auto intervalTimeUs
+@@ -2507,7 +2513,7 @@
+ 	/**
+ 	 * Parameter address for module DAVIS_CONFIG_DVS:
+ 	 * specify the time difference constant for the background-activity filter.
+-	 * Range: 0 - 4095, in 250µs units.
++	 * Range: 0 - 4095, in 250碌s units.
+ 	 * Events that are correlated within this time-frame are let through,
+ 	 * while others are filtered out.
+ 	 */
+@@ -2522,7 +2528,7 @@
+ 	/**
+ 	 * Parameter address for module DAVIS_CONFIG_DVS:
+ 	 * specify the time constant for the refractory period filter.
+-	 * Range: 0 - 4095, in 250µs units.
++	 * Range: 0 - 4095, in 250碌s units.
+ 	 * Pixels will be inhibited from generating new events during this
+ 	 * time after the last even has fired.
+ 	 */
+@@ -2939,10 +2945,10 @@
+ 	 * Parameter address for module DAVIS_CONFIG_IMU:
+ 	 * select the full scale range of the gyroscope outputs.
+ 	 * Valid values are:
+-	 * 0 - +- 250 °/s
+-	 * 1 - +- 500 °/s
+-	 * 2 - +- 1000 °/s
+-	 * 3 - +- 2000 °/s
++	 * 0 - +- 250 掳/s
++	 * 1 - +- 500 掳/s
++	 * 2 - +- 1000 掳/s
++	 * 3 - +- 2000 掳/s
+ 	 */
+ 	static constexpr uint16_t IMU_GYRO_FULL_SCALE{10};
+ 
+@@ -3131,7 +3137,7 @@
+ 	 * Parameter address for module DAVIS_CONFIG_USB:
+ 	 * the time delay after which a packet of data is committed to
+ 	 * USB, even if it is not full yet (short USB packet).
+-	 * The value is in 125µs time-slices, corresponding to how
++	 * The value is in 125碌s time-slices, corresponding to how
+ 	 * USB schedules its operations (a value of 4 for example
+ 	 * would mean waiting at most 0.5ms until sending a short
+ 	 * USB packet to the host).
+@@ -3480,7 +3486,7 @@
+ 	void dataParserCallback(parser::ParsedData data) {
+ 		if (!data.frames.empty()) {
+ 			// Exposure is in ticks, convert to actual microseconds.
+-			// Times are in µs on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
++			// Times are in 碌s on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 			for (auto &frame : data.frames) {
+ 				frame.exposure
+ 					= dv::Duration{std::llround(static_cast<float>(frame.exposure.count()) / mADCClockActual)};
+@@ -3500,7 +3506,7 @@
+ 
+ 					mAutoExposureLast = newExposureTimeUs;
+ 
+-					// Times are in µs on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
++					// Times are in 碌s on host, but in cycles @ ADC_CLOCK_FREQ on FPGA, so we adjust for that.
+ 					auto newExposureTimeInTicks = static_cast<uint32_t>(
+ 						std::lround(static_cast<float>(newExposureTimeUs.count()) * mADCClockActual));
+ 
+--- a/processing-source/include/dv-processing/io/camera/usb_device.hpp
++++ b/processing-source/include/dv-processing/io/camera/usb_device.hpp
+@@ -268,6 +268,7 @@
+ 
+ 	[[nodiscard]] static std::vector<DeviceDescriptor> findCompatibleDevices(
+ 		const compatibleCameraCallbackType &compatibleDevice, loggerCallbackType logger) {
++		std::scoped_lock discoveryLock{LIBUSB_OPEN_DISCOVERY_LOCK};
+ 		if (!compatibleDevice) {
+ 			throw dv::exceptions::RuntimeError("Compatible camera callback must be defined.");
+ 		}
+@@ -426,6 +427,7 @@
+ 		mUsbLogLevel(deviceLogLevel),
+ 		mUsbDeviceLogger(std::move(deviceLogger)),
+ 		mDescriptor(deviceToOpen) {
++		std::scoped_lock openingLock{LIBUSB_OPEN_DISCOVERY_LOCK};
+ 		if (!expectedDevice) {
+ 			throw dv::exceptions::RuntimeError("Compatible camera callback must be defined.");
+ 		}
+@@ -787,7 +789,7 @@
+ 
+ 		// Request is out and will be handled at some point by USB thread, wait on that.
+ 		while (completed < 0) {
+-			// Sleep for 100µs to avoid busy loop.
++			// Sleep for 100碌s to avoid busy loop.
+ 			std::this_thread::sleep_for(std::chrono::microseconds(100));
+ 		}
+ 
+@@ -814,7 +816,7 @@
+ 
+ 		// Request is out and will be handled at some point by USB thread, wait on that.
+ 		while (completed < 0) {
+-			// Sleep for 100µs to avoid busy loop.
++			// Sleep for 100碌s to avoid busy loop.
+ 			std::this_thread::sleep_for(std::chrono::microseconds(100));
+ 		}
+ 
+@@ -1121,6 +1123,8 @@
+ 	}
+ 
+ 	static inline std::shared_mutex LIBUSB_LOG_MAP_LOCK{};
++	// WinUSB handles are exclusive: do not discover while another open is in progress.
++	static inline std::mutex LIBUSB_OPEN_DISCOVERY_LOCK{};
+ 	static inline std::unordered_map<libusb_context *, std::function<void(LogLevel level, std::string_view message)>>
+ 		LIBUSB_LOG_MAP{};
+ 
+--- /dev/null
++++ b/runtime-source/src/log_safety.hpp
+@@ -0,0 +1,40 @@
++// Local DV Companion patch; Apache-2.0. No platform-specific encoding assumptions.
++#pragma once
++#include <string>
++#include <string_view>
++
++namespace dv_companion {
++inline std::string safeUtf8(std::string_view input) {
++    std::string out;
++    out.reserve(input.size());
++    constexpr char hex[]="0123456789ABCDEF";
++    for (std::size_t i=0;i<input.size();) {
++        const auto c=static_cast<unsigned char>(input[i]);
++        std::size_t n=c<0x80?1:(c>=0xC2&&c<=0xDF?2:(c>=0xE0&&c<=0xEF?3:(c>=0xF0&&c<=0xF4?4:0)));
++        bool valid=n>0&&i+n<=input.size();
++        for(std::size_t j=1;valid&&j<n;++j)valid=(static_cast<unsigned char>(input[i+j])&0xC0)==0x80;
++        if(valid&&n>=3){const auto b=static_cast<unsigned char>(input[i+1]);valid=!(c==0xE0&&b<0xA0)&&!(c==0xED&&b>=0xA0)&&!(c==0xF0&&b<0x90)&&!(c==0xF4&&b>=0x90);}
++        // NUL cannot safely traverse a C string-based configuration API.
++        if(valid&&c!=0){out.append(input.substr(i,n));i+=n;}
++        else{out.append("\\x");out.push_back(hex[c>>4]);out.push_back(hex[c&15]);++i;}
++    }
++    return out;
++}
++inline thread_local bool logging=false;
++inline thread_local bool inConfigError=false;
++class ConfigErrorGuard {
++    bool previous;
++public:
++    ConfigErrorGuard():previous(inConfigError){inConfigError=true;}
++    ~ConfigErrorGuard(){inConfigError=previous;}
++};
++class LogGuard {
++    bool entered;
++public:
++    LogGuard():entered(!logging){if(entered)logging=true;}
++    ~LogGuard(){if(entered)logging=false;}
++    explicit operator bool()const{return entered;}
++    LogGuard(const LogGuard&)=delete;
++    LogGuard& operator=(const LogGuard&)=delete;
++};
++}

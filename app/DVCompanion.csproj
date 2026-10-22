@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AssemblyName>DVCompanion</AssemblyName>
+    <ApplicationIcon>Assets/dv-companion.ico</ApplicationIcon>
+    <Version>0.2.1</Version>
+    <Company>Local research tool</Company>
+    <Description>DV 配套管理器：进程管理、配置预检查和本地诊断</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/dv-companion.ico" LogicalName="DVCompanion.Brand.ico" />
+    <EmbeddedResource Include="Assets/dv-companion.png" LogicalName="DVCompanion.Brand.png" />
+  </ItemGroup>
+</Project>

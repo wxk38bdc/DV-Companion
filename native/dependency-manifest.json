@@ -1,0 +1,42 @@
+[
+  {
+    "name": "mingw-w64-x86_64-boost-1.88.0-2-any.pkg.tar.zst",
+    "url": "https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-boost-1.88.0-2-any.pkg.tar.zst",
+    "sha256": "8e0b186d6e0cf5559733e2c5a09885bf23d5480f81b3f6b8469a45d31c6a2392"
+  },
+  {
+    "name": "mingw-w64-x86_64-opencv-4.11.0-5-any.pkg.tar.zst",
+    "url": "https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-opencv-4.11.0-5-any.pkg.tar.zst",
+    "sha256": "9906c6f53a1780cf4674af1ca945bcbd042caa98b6d446a7df7499512e163f5d"
+  },
+  {
+    "name": "mingw-w64-x86_64-fmt-11.1.4-1-any.pkg.tar.zst",
+    "url": "https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-fmt-11.1.4-1-any.pkg.tar.zst",
+    "sha256": "0b5b3ada0e81bc560ac1f71c864aa71f85d0278a8a024a30e4cf0a6a51b5d881"
+  },
+  {
+    "name": "mingw-w64-x86_64-eigen3-3.4.0-1-any.pkg.tar.zst",
+    "url": "https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-eigen3-3.4.0-1-any.pkg.tar.zst",
+    "sha256": "fd0c4360d46052ba65a97ca8b6caf270610f91dc437d699cd5cd88962c7efbb3"
+  },
+  {
+    "name": "mingw-w64-x86_64-flatbuffers-25.2.10-1-any.pkg.tar.zst",
+    "url": "https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-flatbuffers-25.2.10-1-any.pkg.tar.zst",
+    "sha256": "75cee9c32de57f3ff35bc80fe038c326c2f9b706b58e7da992187ba6b6d4d4a4"
+  },
+  {
+    "name": "mingw-w64-x86_64-libusb-1.0.30-1-any.pkg.tar.zst",
+    "url": "https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libusb-1.0.30-1-any.pkg.tar.zst",
+    "sha256": "124edc26b009678a4c5e759481a364abf63ed7f2f49a53092e8bd0a47c0c0740"
+  },
+  {
+    "name": "mingw-w64-x86_64-lz4-1.10.0-1-any.pkg.tar.zst",
+    "url": "https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-lz4-1.10.0-1-any.pkg.tar.zst",
+    "sha256": "a4c5a3bcd26111554c87591275b8a681bfa4473d1607647e24c22ef6213c055c"
+  },
+  {
+    "name": "mingw-w64-x86_64-zstd-1.5.7-1-any.pkg.tar.zst",
+    "url": "https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-zstd-1.5.7-1-any.pkg.tar.zst",
+    "sha256": "589c6e808b0bf34872d9ed6f5393a6df389d2ae6e3d1fdb18b8bccfca701f851"
+  }
+]
