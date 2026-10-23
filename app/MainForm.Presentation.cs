@@ -3,7 +3,7 @@ namespace DVCompanion;
 public sealed partial class MainForm
 {
     readonly TabControl workspaceTabs=new WorkspaceTabs{Dock=DockStyle.Fill,Margin=Padding.Empty};
-    (Button browse,Button open,Button inspect,Button save,Button snapshot,Button restore,Button export,Button folder) BuildPresentation()
+    (StyledButton browse,StyledButton open,StyledButton inspect,StyledButton save,StyledButton snapshot,StyledButton restore,StyledButton export,StyledButton folder) BuildPresentation()
     {
         SuspendLayout();
         var shell=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(24,20,24,12),ColumnCount=1,RowCount=4,BackColor=Presentation.Canvas,Margin=Padding.Empty};
@@ -29,7 +29,7 @@ public sealed partial class MainForm
         var pages=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty,BackColor=Color.White};pages.RowStyles.Add(new(SizeType.Absolute,46));pages.RowStyles.Add(new(SizeType.Percent,100));workspace.Controls.Add(pages);
         var navigation=Presentation.Flow();navigation.Padding=new Padding(3,0,0,0);pages.Controls.Add(navigation,0,0);pages.Controls.Add(workspaceTabs,0,1);
         var navigationButtons=new List<StyledButton>();
-        foreach(string caption in new[]{"设备与运行","配置检查","诊断记录"})
+        foreach(string caption in new[]{"设备与运行","配置检查","诊断记录","双机同步","录制控制"})
         {
             int index=navigationButtons.Count;var item=new StyledButton{Text=caption,AccessibleRole=AccessibleRole.PageTab};Presentation.Button(item,index==0?"tabSelected":"tab");item.MinimumSize=new Size(148,38);item.Margin=new Padding(0,0,8,0);item.Click+=(_,_)=>{workspaceTabs.SelectedIndex=index;workspaceTabs.Focus();};navigationButtons.Add(item);navigation.Controls.Add(item);
         }
@@ -54,7 +54,9 @@ public sealed partial class MainForm
         var privacy=Presentation.Surface(Presentation.Soft,new Padding(12,8,12,8));privacy.Radius=8;privacy.Margin=new Padding(0,0,0,5);var privacyCopy=Presentation.Label("所有记录均保存在本机。诊断包可能包含序列号、文件路径和配置；分享前请检查。",9,false,Presentation.Muted);privacyCopy.Dock=DockStyle.Fill;privacyCopy.AutoSize=false;privacyCopy.TextAlign=ContentAlignment.MiddleLeft;privacy.Controls.Add(privacyCopy);dl.Controls.Add(privacy,0,2);
         dl.Controls.Add(Presentation.Section("运行记录","操作与故障提示"),0,3);var log=Presentation.Surface(Presentation.Soft,new Padding(12));log.Radius=8;activity.BorderStyle=BorderStyle.None;activity.BackColor=Presentation.Soft;activity.ForeColor=Color.FromArgb(60,82,101);log.Controls.Add(activity);dl.Controls.Add(log,0,4);
         foreach(var grid in new[]{cameras,processes,findings})Presentation.Grid(grid);Presentation.Empty(cameras,"尚未发现相机，请检查连接后刷新");Presentation.Empty(processes,"当前没有 DV 进程");Presentation.Empty(findings,"打开 XML 后，检查结果将在这里显示");
-        var footer=Presentation.Label("0.2.1  ·  默认不覆盖原软件  ·  不自动强杀或重启录制任务",8.5f,false,Presentation.Muted);footer.Dock=DockStyle.Fill;footer.AutoSize=false;footer.TextAlign=ContentAlignment.MiddleLeft;footer.Padding=new Padding(3,4,0,0);shell.Controls.Add(footer,0,3);
+        workspaceTabs.TabPages.Add(BuildStereoPage());
+        workspaceTabs.TabPages.Add(BuildRecordingPage());
+        var footer=Presentation.Label("0.4.0  ·  默认不覆盖原软件  ·  不自动强杀或重启录制任务",8.5f,false,Presentation.Muted);footer.Dock=DockStyle.Fill;footer.AutoSize=false;footer.TextAlign=ContentAlignment.MiddleLeft;footer.Padding=new Padding(3,4,0,0);shell.Controls.Add(footer,0,3);
         void Stretch(Control control)
         {
             if(control is TableLayoutPanel table&&table.ColumnCount==1&&table.ColumnStyles.Count==0)table.ColumnStyles.Add(new(SizeType.Percent,100));

@@ -9,8 +9,40 @@ namespace DVCompanion;
 // Wire layout follows upstream dv_config_action_data.fbs (Apache-2.0).
 // Only loopback endpoints discovered for the selected process are accepted.
 public record WireMessage(byte Action, string Node, string Key, string Value, sbyte Type,int Flags=0);
+public record BatchWriteStatus(string Node,string Key,string Value,bool Confirmed,string Error,double AcknowledgedMs);
+public record BatchWriteResult(bool Dispatched,double ElapsedMs,IReadOnlyList<BatchWriteStatus> Writes,string TransportError)
+{
+    public bool Success=>Dispatched&&TransportError.Length==0&&Writes.Count>0&&Writes.All(w=>w.Confirmed);
+}
 public static class DvProtocol
 {
+    public static async Task<BatchWriteResult> PutBatchAsync(int port,IReadOnlyList<WireMessage> writes,int timeoutMs=6000)
+    {
+        if(port is <1 or >65535||writes.Count is <1 or >64||writes.Any(w=>w.Action!=10))throw new ArgumentException("批量写入参数无效");
+        using var payload=new MemoryStream();foreach(var write in writes){var bytes=Encode(10,write.Node,write.Key,write.Value,write.Type,write.Flags);payload.Write(BitConverter.GetBytes(bytes.Length));payload.Write(bytes);}
+        if(payload.Length>2_000_000)throw new InvalidDataException("批量请求过大");
+        using var client=new TcpClient(AddressFamily.InterNetwork){NoDelay=true};using var timeout=new CancellationTokenSource(timeoutMs);
+        var watch=System.Diagnostics.Stopwatch.StartNew();var results=new List<BatchWriteStatus>();bool dispatched=false;string error="";
+        try
+        {
+            await client.ConnectAsync(IPAddress.Loopback,port,timeout.Token);var stream=client.GetStream();
+            // One buffered write queues all commands without waiting for individual round trips.
+            // The DV server still applies each PUT separately; this is not an atomic barrier.
+            dispatched=true;await stream.WriteAsync(payload.ToArray(),timeout.Token);
+            int total=0;
+            foreach(var write in writes)
+            {
+                byte[] size=new byte[4];await stream.ReadExactlyAsync(size,timeout.Token);int n=BitConverter.ToInt32(size);
+                if(n<8||n>8_000_000||(total+=n)>24_000_000)throw new InvalidDataException("批量响应超过限制");
+                byte[] data=new byte[n];await stream.ReadExactlyAsync(data,timeout.Token);var reply=Decode(data);
+                bool confirmed=reply.Action==10;results.Add(new(write.Node,write.Key,write.Value,confirmed,confirmed?"":reply.Action==0?reply.Value:"DV 响应类型不符",watch.Elapsed.TotalMilliseconds));
+            }
+        }
+        catch(Exception ex)when(ex is IOException or System.Net.Sockets.SocketException or OperationCanceledException or InvalidDataException)
+        {error=ex is OperationCanceledException?"批量请求超时；部分指令可能已执行，必须读取后台核对。":ex.Message;}
+        foreach(var write in writes.Skip(results.Count))results.Add(new(write.Node,write.Key,write.Value,false,"未获得确认："+error,watch.Elapsed.TotalMilliseconds));
+        return new(dispatched,watch.Elapsed.TotalMilliseconds,results,error);
+    }
     static void U16(byte[] b,int p,int v)=>BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(p,2),(ushort)v);
     static void I32(byte[] b,int p,int v)=>BinaryPrimitives.WriteInt32LittleEndian(b.AsSpan(p,4),v);
     static int I32(byte[] b,int p) { Check(b,p,4); return BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(p,4)); }

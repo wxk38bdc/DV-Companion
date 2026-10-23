@@ -14,11 +14,10 @@ internal static class Presentation
     public static RoundedSurface Surface(Color? fill=null,Padding? padding=null)=>new(){Dock=DockStyle.Fill,Surface=fill??Color.White,Stroke=Line,Padding=padding??new Padding(16),Margin=Padding.Empty};
     public static Label Label(string text,float size=9.5f,bool bold=false,Color? color=null)=>new(){Text=text,AutoSize=true,Font=new Font("Microsoft YaHei UI",size,bold?FontStyle.Bold:FontStyle.Regular),ForeColor=color??Ink,Margin=Padding.Empty,BackColor=Color.Transparent};
     public static FlowLayoutPanel Flow()=>new(){Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty,BackColor=Color.White};
-    public static void Button(Button button,string tone="neutral")
+    public static void Button(StyledButton button,string tone="neutral")
     {
-        button.AutoSize=true;button.AutoSizeMode=AutoSizeMode.GrowAndShrink;button.MinimumSize=new Size(0,38);button.Padding=new Padding(15,0,15,0);button.Margin=new Padding(0,0,10,0);button.Font=new Font("Microsoft YaHei UI",9.5f);button.Cursor=Cursors.Hand;
-        button.FlatStyle=FlatStyle.Flat;button.FlatAppearance.BorderSize=0;
-        if(button is StyledButton styled)styled.Tone=tone;
+        button.AutoSize=true;button.MinimumSize=new Size(0,38);button.Padding=new Padding(15,0,15,0);button.Margin=new Padding(0,0,10,0);button.Font=new Font("Microsoft YaHei UI",9.5f);button.Cursor=Cursors.Hand;
+        button.Tone=tone;
     }
     public static void Grid(DataGridView grid)
     {
@@ -51,17 +50,43 @@ internal sealed class RoundedSurface:Panel
     }
 }
 
-internal sealed class StyledButton:Button
+internal sealed class StyledButton:Control,IButtonControl
 {
     bool hover,pressed;[DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]public string Tone{get;set;}="neutral";
-    public StyledButton(){SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);}
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]public DialogResult DialogResult{get;set;}
+    public StyledButton()
+    {
+        // A native BUTTON window can still draw themed edges over owner painting.
+        // Use an ordinary managed control, retaining Click, keyboard and accessibility actions.
+        SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw|ControlStyles.Selectable|ControlStyles.StandardClick,true);
+        SetStyle(ControlStyles.StandardDoubleClick,false);TabStop=true;AccessibleRole=AccessibleRole.PushButton;
+    }
+    public override Size GetPreferredSize(Size proposedSize){var text=TextRenderer.MeasureText(Text,Font);return new Size(Math.Max(MinimumSize.Width,text.Width+Padding.Horizontal+6),Math.Max(MinimumSize.Height,text.Height+Padding.Vertical+8));}
+    public void NotifyDefault(bool value){Invalidate();}
+    public void PerformClick(){if(Enabled&&CanSelect)OnClick(EventArgs.Empty);}
+    protected override void OnClick(EventArgs e){if(!Enabled)return;if(DialogResult!=DialogResult.None&&FindForm() is {} form)form.DialogResult=DialogResult;base.OnClick(e);}
+    protected override bool IsInputKey(Keys keyData)=>(keyData&Keys.KeyCode) is Keys.Enter or Keys.Space||base.IsInputKey(keyData);
+    protected override void OnKeyDown(KeyEventArgs e){if(e.KeyCode is Keys.Space or Keys.Enter){if(!pressed){pressed=true;if(e.KeyCode==Keys.Enter)PerformClick();}e.Handled=true;Invalidate();}base.OnKeyDown(e);}
+    protected override void OnKeyPress(KeyPressEventArgs e){if(e.KeyChar is ' ' or '\r')e.Handled=true;base.OnKeyPress(e);}
+    protected override void OnKeyUp(KeyEventArgs e){if(e.KeyCode is Keys.Space or Keys.Enter){bool click=pressed&&e.KeyCode==Keys.Space;pressed=false;e.Handled=true;Invalidate();if(click)PerformClick();}base.OnKeyUp(e);}
+    protected override AccessibleObject CreateAccessibilityInstance()=>new StyledButtonAccessibility(this);
+    sealed class StyledButtonAccessibility(StyledButton owner):ControlAccessibleObject(owner)
+    {
+        public override string? DefaultAction=>"按下";
+        public override void DoDefaultAction()=>owner.PerformClick();
+    }
     protected override void OnMouseEnter(EventArgs e){hover=true;Invalidate();base.OnMouseEnter(e);}
     protected override void OnMouseLeave(EventArgs e){hover=pressed=false;Invalidate();base.OnMouseLeave(e);}
-    protected override void OnMouseDown(MouseEventArgs e){if(e.Button==MouseButtons.Left)pressed=true;Invalidate();base.OnMouseDown(e);}
+    protected override void OnMouseDown(MouseEventArgs e){if(e.Button==MouseButtons.Left){Focus();pressed=true;}Invalidate();base.OnMouseDown(e);}
     protected override void OnMouseUp(MouseEventArgs e){pressed=false;Invalidate();base.OnMouseUp(e);}
-    protected override void OnEnabledChanged(EventArgs e){Invalidate();base.OnEnabledChanged(e);}
+    protected override void OnEnabledChanged(EventArgs e){if(!Enabled)pressed=false;Invalidate();base.OnEnabledChanged(e);}
     protected override void OnGotFocus(EventArgs e){Invalidate();base.OnGotFocus(e);}
     protected override void OnLostFocus(EventArgs e){pressed=false;Invalidate();base.OnLostFocus(e);}
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        // Every button is hosted on a solid surface; repaint the entire rectangle first.
+        e.Graphics.Clear(Parent?.BackColor??Presentation.Canvas);
+    }
     protected override void OnPaint(PaintEventArgs e)
     {
         var color=Tone switch{"primary"=>Presentation.Accent,"accent" or "tabSelected"=>Presentation.AccentSoft,"danger"=>Color.FromArgb(255,246,244),_=>Color.White};

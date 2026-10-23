@@ -7,8 +7,8 @@ namespace DVCompanion;
 public sealed partial class MainForm:Form
 {
     readonly TextBox root=new(){Text=@"C:\Program Files\DV",Dock=DockStyle.Fill};
-    readonly Button start=new StyledButton(){Text="启动 DV",AutoSize=true},stop=new StyledButton(){Text="正常退出本次 DV",AutoSize=true},refresh=new StyledButton(){Text="刷新设备与进程",AutoSize=true};
-    readonly Button recover=new StyledButton(){Text="正常关闭所选后台",AutoSize=true},force=new StyledButton(){Text="强制结束所选进程…",AutoSize=true};
+    readonly StyledButton start=new(){Text="启动 DV",AutoSize=true},stop=new(){Text="正常退出本次 DV",AutoSize=true},refresh=new(){Text="刷新设备与进程",AutoSize=true};
+    readonly StyledButton recover=new(){Text="正常关闭所选后台",AutoSize=true},force=new(){Text="强制结束所选进程…",AutoSize=true};
     readonly CheckBox patched=new(){Text="使用修复后台（保留原 DV 界面）",AutoSize=true,Checked=File.Exists(Session.PatchedExecutable)};
     readonly Label status=new(){Text="就绪",AutoSize=true,Font=new Font("Microsoft YaHei UI",15,FontStyle.Bold)},detail=new(){AutoSize=true,MaximumSize=new Size(970,0)};
     readonly DataGridView cameras=Grid(),processes=Grid(),findings=Grid();
@@ -49,12 +49,13 @@ public sealed partial class MainForm:Form
     {
         if(busy)return;busy=true;Buttons(false);try{await action();}catch(Exception ex){Log("操作未完成："+ex.Message);State("需要处理",ex.Message);Warn(ex.Message);}finally{busy=false;Buttons(true);}
     }
-    void Buttons(bool enabled){start.Enabled=enabled&&session==null;stop.Enabled=enabled&&session!=null;refresh.Enabled=recover.Enabled=force.Enabled=enabled;root.Enabled=patched.Enabled=enabled&&session==null;}
+    void Buttons(bool enabled){start.Enabled=enabled&&session==null;stop.Enabled=enabled&&session!=null;refresh.Enabled=recover.Enabled=force.Enabled=enabled;root.Enabled=patched.Enabled=enabled&&session==null;syncNow.Enabled=enabled&&stereoState?.CanSync==true;stereoRefresh.Enabled=enabled;UpdateRecordingButtons(enabled);}
     async Task RefreshAll()
     {
         var result=await Task.Run(()=>(devices:Native.Cameras(),procs:Native.DvProcesses(root.Text)));deviceList=result.devices;
         cameras.DataSource=deviceList.Select(d=>new{设备=d.Name,序列号=d.Serial,状态=d.State}).ToList();BindProcesses(result.procs);
         if(session==null)State(result.procs.Count>0?"发现其他 DV 进程":"可以启动",result.procs.Count>0?"请先确认原 DV 是否已关闭。后台残留可选中后请求正常退出。":"检测到 "+deviceList.Count+" 台相机；运行中故障会显示提示并记录。");
+        await RefreshStereo();
     }
     void BindProcesses(List<ProcessIdentity> all)
     {
@@ -95,7 +96,7 @@ public sealed partial class MainForm:Form
         var members=current.Remember();if(members.Count==0)FinishSession("本次 DV 已全部退出，无残留。");else{await Diagnostics.Capture(root.Text,current);State("仍有本次进程待处理","诊断已保存。可以选中后台再次正常关闭；强制结束需要单独确认。");current.StopRequested=false;}
         await RefreshAll();
     }
-    void FinishSession(string message){if(session==null)return;session.Note(message);session.Dispose();session=null;Log(message);State("已退出",message);Buttons(!busy);}
+    void FinishSession(string message){if(session==null)return;session.Note(message);session.Dispose();session=null;Log(message);State("已退出",message);stereoEpoch++;SetStereoUnavailable("DV 已退出","重新启动两台相机采集后，再检查并同步。");SetRecordingsUnavailable("DV 已退出，文件录制状态不再实时更新。");Buttons(!busy);}
     async Task RecoverSelected()
     {
         var p=Selected()??throw new InvalidOperationException("请先在进程表中选中一个 DV 后台。");
@@ -165,8 +166,11 @@ public sealed partial class MainForm:Form
         var runtimes=session.Runtimes().ToList();if(runtimes.Count!=1)throw new InvalidOperationException("本次后台数量不唯一，未恢复项目。");
         var doc=Configuration.Parse(editor.Text);ProjectRestore.Order(ProjectRestore.Portable(doc));
         if(!Ask("将停止当前采集并替换本次 DV 的模块、连线和参数。会先保存当前结构，录制模块不会自动启动。\n请勿同时在原 DV 中编辑或加载项目。是否继续？"))return;
+        stereoEpoch++;SetStereoUnavailable("正在恢复项目","恢复完成后将重新读取双机状态。");
+        SetRecordingsUnavailable("正在恢复项目，原录制列表已失效。");
         string folder=Storage.NewFolder("project-restores");State("正在恢复项目","正在重建结构并核对参数，请暂时不要操作原 DV。");
         await ProjectRestore.Restore(Diagnostics.RuntimePort(runtimes[0]),doc,folder,Log);Log("恢复记录："+folder);configPath.Text="项目已恢复。可继续在 DV 中修改，再点击“保存可恢复项目…”直接保存最新结构。";State("项目恢复已完成","模块、参数及连线已核对；文件录制保持停止。请在原 DV 的 Structure 页查看。");
+        await RefreshStereo();
     }
     async Task Monitor()
     {
@@ -174,6 +178,8 @@ public sealed partial class MainForm:Form
         try
         {
             if(++tick%5==0)await RefreshAll();
+            else if(tick%3==0)await RefreshStereo();
+            if(busy||closing)return;
             if(session==null)return;var current=session;var members=current.Remember();BindProcesses(Native.DvProcesses(root.Text));
             if(members.Count==0){FinishSession("本次 DV 已全部退出，无残留。");return;}
             string text=current.NewRuntimeText();string? error=text.Split('\n').LastOrDefault(l=>l.Contains(": ERROR:")&&!l.Contains("ConfigServer: Client"));if(error!=null){string advice=ErrorAdvice.Explain(error);State("检测到运行错误",advice);current.Note(error.Trim());Log(advice);}
@@ -198,22 +204,23 @@ public sealed partial class MainForm:Form
     }
     async void OnClosing(object? sender,FormClosingEventArgs e)
     {
+        if(!closing&&busy){e.Cancel=true;Warn("正在处理任务，请完成后再关闭管理器。");return;}
         if(closing)return;if(session!=null){e.Cancel=true;if(busy||monitoring){Warn("正在处理任务，请稍后关闭。");return;}if(!Ask("本次 DV 仍在运行。先请求正常退出，完成后关闭管理器？"))return;await Run(StopDv);if(session!=null)return;}
         closing=true;timer.Stop();if(e.Cancel)BeginInvoke(Close);
     }
-    internal void RenderPreviews(string folder)
+    internal void RenderPreviews(string folder,string? stereoSnapshot=null)
     {
         Directory.CreateDirectory(folder);deviceList=Native.Cameras();cameras.DataSource=deviceList.Select(d=>new{设备=d.Name,序列号=d.Serial,状态=d.State}).ToList();BindProcesses(Native.DvProcesses(root.Text));State("设备检查完成","已识别 "+deviceList.Count+" 台相机。启动前请先处理其他 DV 实例，避免重复打开设备。");
         var tab=workspaceTabs;
         editor.Text="<dv version=\"2.0\">\r\n  <node name=\"\" path=\"/\">\r\n    <node name=\"mainloop\" path=\"/mainloop/\" />\r\n  </node>\r\n</dv>";
         findings.DataSource=Configuration.Validate(Configuration.Parse(editor.Text));activity.Text="管理器已启动。\r\n设备和进程检查完成。\r\n所有诊断记录只保存在本机。";
-        var shell=Controls.OfType<TableLayoutPanel>().Single();Controls.Remove(shell);shell.Dock=DockStyle.None;shell.Size=ClientSize;shell.Visible=true;shell.CreateControl();shell.PerformLayout();
+        var shell=Controls.OfType<TableLayoutPanel>().Single();Controls.Remove(shell);shell.BindingContext=new BindingContext();shell.Dock=DockStyle.None;shell.Size=ClientSize;shell.Visible=true;shell.CreateControl();shell.PerformLayout();
         object LayoutInfo(Control c)=>new{type=c.GetType().Name,text=c.Text,bounds=new{c.Left,c.Top,c.Width,c.Height},font=c.Font.Size,fontHeight=c.Font.Height,dpi=c.DeviceDpi,children=c.Controls.Cast<Control>().Select(LayoutInfo).ToArray()};
         Buttons(true);
         foreach(string mode in new[]{"preview","minimum"})
         {
             if(mode=="minimum")shell.Size=new Size(MinimumSize.Width-(Width-ClientSize.Width),MinimumSize.Height-(Height-ClientSize.Height));
-            for(int i=0;i<tab.TabPages.Count;i++){tab.SelectedIndex=i;tab.SelectedTab!.CreateControl();shell.PerformLayout();using var bitmap=new Bitmap(shell.Width,shell.Height);shell.DrawToBitmap(bitmap,new Rectangle(Point.Empty,shell.Size));bitmap.Save(Path.Combine(folder,mode+"-"+i+".png"),System.Drawing.Imaging.ImageFormat.Png);Storage.WriteJson(Path.Combine(folder,mode+"-"+i+"-layout.json"),LayoutInfo(shell));}
+            for(int i=0;i<tab.TabPages.Count;i++){tab.SelectedIndex=i;tab.SelectedTab!.CreateControl();if(i==3&&stereoSnapshot!=null){ShowStereo(StereoSync.Inspect(Configuration.Parse(File.ReadAllText(stereoSnapshot))),ProcessIdentity.Read(Environment.ProcessId)!);stereoUpdated.Text="界面验证 · 已完成的实物同步快照（非实时连接）";syncNow.Enabled=false;}if(i==4&&stereoSnapshot!=null){ShowRecordings(Configuration.Parse(File.ReadAllText(stereoSnapshot)),ProcessIdentity.Read(Environment.ProcessId)!);recordingUpdated.Text="界面预览 · 已完成的实物录制快照（非实时连接）";recordingOnline=false;UpdateRecordingButtons(false);}shell.PerformLayout();using var bitmap=new Bitmap(shell.Width,shell.Height);shell.DrawToBitmap(bitmap,new Rectangle(Point.Empty,shell.Size));bitmap.Save(Path.Combine(folder,mode+"-"+i+".png"),System.Drawing.Imaging.ImageFormat.Png);Storage.WriteJson(Path.Combine(folder,mode+"-"+i+"-layout.json"),LayoutInfo(shell));}
         }
         shell.Dispose();
     }

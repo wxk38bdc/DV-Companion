@@ -26,4 +26,16 @@ __pycache__/
 *.pyc
 
 # Keep local UI captures out of public commits
-docs/images/configuration.png
+docs/images/
+*.aedat
+*.aedat2
+*.aedat3
+*.bag
+*.pdb
+*.pid
+*.backup
+*.bak
+*.xml
+!**/examples/*.xml
+*test-results*.json
+*report*.json

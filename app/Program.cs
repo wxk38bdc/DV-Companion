@@ -14,7 +14,7 @@ internal static class Program
             try
             {
                 if(args[0]=="--child-sleep"){Thread.Sleep(120000);return;}
-                if(args[0]=="--render-preview"){ApplicationConfiguration.Initialize();using var form=new MainForm();form.RenderPreviews(args[1]);return;}
+                if(args[0]=="--render-preview"){ApplicationConfiguration.Initialize();using var form=new MainForm();form.RenderPreviews(args[1],args.Length>2?args[2]:null);return;}
                 if(args[0]=="--child-parent")
                 {
                     var child=Process.Start(new ProcessStartInfo(Environment.ProcessPath!){ArgumentList={"--child-sleep"},UseShellExecute=false,CreateNoWindow=true})!;
@@ -30,6 +30,9 @@ internal static class Program
                 if(args[0]=="--gui-smoke"){TestFlows.Gui(output).GetAwaiter().GetResult();return;}
                 if(args[0]=="--restore-test"){RestoreTests.Run(output,args[2]).GetAwaiter().GetResult();return;}
                 if(args[0]=="--save-cycle-test"){SaveCycleTests.Run(output,args[2]).GetAwaiter().GetResult();return;}
+                if(args[0]=="--stereo-test"){StereoHardwareTest.Run(output,args[2]).GetAwaiter().GetResult();return;}
+                if(args[0]=="--recording-test"){RecordingHardwareTest.Run(output,args[2],args[3]).GetAwaiter().GetResult();return;}
+                if(args[0]=="--recording-ui-test"){RecordingUiTest.Run(output,args[2],args[3]);return;}
                 if(args[0]=="--probe-existing")
                 {
                     var list=new List<object>();foreach(var p in Native.DvProcesses(@"C:\Program Files\DV").Where(p=>p.Name=="dv-runtime.exe"))
@@ -57,6 +60,8 @@ internal static class Tests
         string Camera(string name,string serial,string sync="",bool secondary=false)=>"<node name=\""+name+"\" path=\"/mainloop/"+name+"/\"><attr key=\"moduleLibrary\" type=\"string\">dv_davis</attr><attr key=\"serialNumber\" type=\"string\">"+serial+"</attr><attr key=\"syncWith\" type=\"string\">"+sync+"</attr>"+(secondary?"<node name=\"sourceInfo\" path=\"/mainloop/"+name+"/sourceInfo/\"><attr key=\"deviceIsMaster\" type=\"bool\">false</attr></node>":"")+"</node>";
         List<Finding> Check(string xml)=>Configuration.Validate(Configuration.Parse(xml));
         await SaveTests.Run(Test,Assert);
+        await StereoTests.Run(Test,Assert);
+        await RecordingTests.Run(Test,Assert);
         await Test("FlatBuffers 请求含中文与空格可往返",()=>Sync(()=>{var msg=DvProtocol.Decode(DvProtocol.Encode(10,"/system/config/","saveFile",@"C:\测 试\a.xml"));Assert(msg.Action==10&&msg.Value==@"C:\测 试\a.xml"&&msg.Type==-1,"协议字段错误");}));
         await Test("拒绝损坏协议数据",()=>Sync(()=>{try{DvProtocol.Decode([1,2,3]);throw new Exception("未拒绝损坏数据");}catch(InvalidDataException){}}));
         await Test("配置导入协议保留类型与标志",()=>Sync(()=>{var m=DvProtocol.Decode(DvProtocol.Encode(10,"/mainloop/a/","_guiSupport","{}",5,4));Assert(m.Type==5&&m.Flags==4,"导入类型或标志丢失");}));
